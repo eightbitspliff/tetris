@@ -32,6 +32,13 @@ jobs:
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk ../NeonTetris.apk
 
+      - name: Check APK contents
+        run: |
+          unzip -l NeonTetris.apk | grep -E 'assets/web/|classes.dex'
+          for f in index.html js/game.js js/render.js js/input.js js/touch.js js/audio.js js/main.js; do
+            unzip -l NeonTetris.apk | grep -q "assets/web/$f" || { echo "missing $f"; exit 1; }
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: NeonTetris-apk

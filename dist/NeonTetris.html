@@ -421,8 +421,8 @@ const MAX_RESETS = 15;    // move/rotate lock-delay resets per piece
 const CLEAR_TIME = 420;   // ms line clear animation
 const DAS = 160;          // ms before auto-repeat kicks in
 const ARR = 33;           // ms between auto-repeat moves
-const SOFT_FACTOR = 6;    // soft drop falls this many times faster than gravity
-const SOFT_MIN_MS = 45;   // but never faster than this per row
+const SOFT_FACTOR = 12;   // soft drop falls this many times faster than gravity
+const SOFT_MIN_MS = 33;   // but never faster than this per row
 
 function gravityMs(level) {
   const l = Math.min(level, 20) - 1;

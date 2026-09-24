@@ -3,6 +3,11 @@
 Grafisch aufwendiges Tetris im Browser (HTML5 Canvas, kein Build, keine Abhängigkeiten) –
 voll spielbar mit dem **Xbox-Controller**.
 
+## Auf den Desktop legen (Doppelklick zum Spielen)
+
+`dist/NeonTetris.html` herunterladen und auf den Desktop legen – das ist eine einzelne,
+eigenständige Datei. Doppelklick öffnet das Spiel im Browser.
+
 ## Starten
 
 `index.html` im Browser öffnen (Chrome/Edge empfohlen, Firefox geht auch).

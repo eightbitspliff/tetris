@@ -57,7 +57,8 @@ const MAX_RESETS = 15;    // move/rotate lock-delay resets per piece
 const CLEAR_TIME = 420;   // ms line clear animation
 const DAS = 160;          // ms before auto-repeat kicks in
 const ARR = 33;           // ms between auto-repeat moves
-const SOFT_MS = 25;       // ms per row while soft dropping
+const SOFT_FACTOR = 6;    // soft drop falls this many times faster than gravity
+const SOFT_MIN_MS = 45;   // but never faster than this per row
 
 function gravityMs(level) {
   const l = Math.min(level, 20) - 1;
@@ -408,8 +409,9 @@ class Game {
     // Gravity / soft drop
     const soft = inp.down('soft');
     let interval = gravityMs(this.level);
-    if (soft) interval = Math.min(interval, SOFT_MS);
-    this.gravityAcc += dt;
+    if (soft) interval = Math.min(interval, Math.max(interval / SOFT_FACTOR, SOFT_MIN_MS));
+    // Never carry more than one row of accumulated time (prevents a jump when pressing down).
+    this.gravityAcc = Math.min(this.gravityAcc, interval) + dt;
     let guard = 0;
     while (this.gravityAcc >= interval && guard++ < TOTAL) {
       this.gravityAcc -= interval;

@@ -3,6 +3,21 @@
 Grafisch aufwendiges Tetris im Browser (HTML5 Canvas, kein Build, keine Abhängigkeiten) –
 voll spielbar mit dem **Xbox-Controller**.
 
+## Android-App
+
+Die APK wird automatisch von GitHub Actions gebaut und unter **Releases** veröffentlicht
+(`NeonTetris.apk`). Auf dem Handy herunterladen, öffnen und die Installation erlauben
+(„Unbekannte Apps installieren“ für den Browser/Dateimanager zulassen).
+
+- Xbox-Controller per Bluetooth koppeln – wird direkt von der App erkannt (inkl. Vibration,
+  sofern Android/Controller das unterstützen)
+- Ohne Controller: Touch-Steuerung (Ziehen = bewegen, Tippen = drehen, nach unten ziehen =
+  Soft Drop, schnell nach unten wischen = Hard Drop, nach oben wischen = Halten)
+- Hoch- und Querformat, Vollbild, Bildschirm bleibt an; Zurück-Taste = Pause/Menü
+
+Das Android-Projekt liegt in `android/` (WebView-Hülle, die `index.html` + `js/` einbettet).
+Lokal bauen: `cd android && ./gradlew assembleRelease` (Android SDK nötig).
+
 ## Auf den Desktop legen (Doppelklick zum Spielen)
 
 `dist/NeonTetris.html` herunterladen und auf den Desktop legen – das ist eine einzelne,

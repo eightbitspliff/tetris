@@ -148,6 +148,9 @@ class Game {
     this.lastKick = 0;
   }
 
+  // True when the active piece accepts direct commands (touch input).
+  canAct() { return this.state === 'playing' && !!this.piece && !this.clearing; }
+
   get matrix() { return MATRICES[this.piece.type][this.piece.rot]; }
 
   collides(m, x, y) {

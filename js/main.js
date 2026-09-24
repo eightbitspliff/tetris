@@ -90,12 +90,61 @@ function handleMeta() {
   }
 }
 
+// ---------- Touch controls ----------
+const canvas = document.getElementById('game');
+Touch.attach(canvas);
+Touch.on('move', dir => { if (game.canAct()) game.move(dir); });
+Touch.on('hard', () => { if (game.canAct()) game.hardDrop(); });
+Touch.on('hold', () => { if (game.canAct()) game.holdPiece(); });
+Touch.on('soft', on => Input.setTouchSoft(on && game.state === 'playing'));
+Touch.on('tap', (x, y) => {
+  Sound.resume();
+  const cmd = view.hitButton(x, y);
+  if (cmd) { runCommand(cmd); return; }
+  switch (game.state) {
+    case 'menu': startGame(); break;
+    case 'playing': if (game.canAct()) game.rotate(x > view.W / 2 ? 1 : -1); break;
+    case 'paused': resume(); break;
+    case 'gameover': if (view.gameOverT > 1100) startGame(); break;
+  }
+});
+
+canvas.addEventListener('click', e => {
+  const cmd = view.hitButton(e.clientX, e.clientY);
+  if (cmd) runCommand(cmd);
+});
+
+function runCommand(cmd) {
+  if (cmd === 'pause' && game.state === 'playing') pause();
+  else if (cmd === 'resume' && game.state === 'paused') resume();
+  else if (cmd === 'restart') startGame();
+  else if (cmd === 'music') view.toast(Sound.toggleMusic() ? '♪ Musik an' : 'Musik aus');
+  else if (cmd === 'menu') toMenu();
+}
+
+function toMenu() {
+  game.state = 'menu';
+  Sound.setMusicActive(false);
+  Input.consume();
+}
+
+// Hooks called by the Android app
+window.androidBack = () => {
+  if (game.state === 'playing') { pause(); return true; }
+  if (game.state === 'paused' || game.state === 'gameover') { toMenu(); return true; }
+  return false; // in the menu: let Android close the app
+};
+window.androidPause = () => { if (game.state === 'playing') pause(); };
+
 // Browsers only allow audio after a user gesture.
 for (const ev of ['keydown', 'pointerdown', 'touchstart']) {
   addEventListener(ev, () => Sound.resume(), { passive: true });
 }
 addEventListener('blur', () => { if (game.state === 'playing') pause(); });
-document.getElementById('game').focus();
+document.addEventListener('visibilitychange', () => { if (document.hidden && game.state === 'playing') pause(); });
+canvas.focus();
+// The Android app allows audio without a user gesture.
+if (window.AndroidBridge) Sound.resume();
 
 // ---------- Main loop ----------
 let last = performance.now();
@@ -103,6 +152,7 @@ function frame(now) {
   const dt = Math.min(50, Math.max(0, now - last));
   last = now;
   Input.poll();
+  Touch.stepPx = Math.max(18, view.cell * 0.9);
   handleMeta();
   game.update(dt, Input);
   view.update(dt);

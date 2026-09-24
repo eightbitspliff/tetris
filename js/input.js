@@ -67,12 +67,51 @@ const Input = (() => {
     catch (e) { return []; }
   }
 
+  // Controller state pushed from the Android app (see android/.../MainActivity.java).
+  const native = { connected: false, name: null, mask: 0, lx: 0, ly: 0 };
+  window.NativePad = {
+    connect(name) {
+      native.connected = true;
+      native.name = name || 'Gamepad';
+      listeners.connect.forEach(f => f(native.name));
+    },
+    disconnect() {
+      const name = native.name;
+      native.connected = false;
+      native.mask = 0;
+      listeners.disconnect.forEach(f => f(name));
+    },
+    update(mask, lx, ly) {
+      native.mask = mask;
+      native.lx = lx;
+      native.ly = ly;
+    },
+  };
+  let touchSoft = false;
+
+  // Applies one controller to the current action state; returns true if it was used.
+  function applyPad(btn, ax, ay) {
+    let active = false;
+    for (const a in PAD) {
+      if (PAD[a].some(btn)) { cur[a] = true; active = true; }
+    }
+    if (ax < -0.5) { cur.left = true; active = true; }
+    if (ax > 0.5) { cur.right = true; active = true; }
+    if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; active = true; }
+    return active;
+  }
+
   function poll() {
     prev = cur;
     cur = {};
     for (const a in KEYS) cur[a] = KEYS[a].some(k => keysDown.has(k));
+    if (touchSoft) cur.soft = true;
 
     padName = null;
+    if (native.connected) {
+      applyPad(i => ((native.mask >> i) & 1) === 1, native.lx, native.ly);
+      padName = native.name;
+    }
     for (const gp of getPads()) {
       if (!gp || !gp.connected) continue;
       if (padName === null) padName = cleanName(gp.id);
@@ -80,20 +119,17 @@ const Input = (() => {
         const b = gp.buttons[i];
         return !!b && (b.pressed || b.value > 0.5);
       };
-      let active = false;
-      for (const a in PAD) {
-        if (PAD[a].some(btn)) { cur[a] = true; active = true; }
-      }
-      const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-      if (ax < -0.5) { cur.left = true; active = true; }
-      if (ax > 0.5) { cur.right = true; active = true; }
-      if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; active = true; }
+      const active = applyPad(btn, gp.axes[0] || 0, gp.axes[1] || 0);
       if (active || activePad < 0) activePad = gp.index;
       if (gp.index === activePad) padName = cleanName(gp.id);
     }
   }
 
   function rumble(duration, strong, weak) {
+    if (window.AndroidBridge) {
+      try { window.AndroidBridge.rumble(Math.round(duration), strong, weak); } catch (e) { /* ignore */ }
+      return;
+    }
     const gp = getPads()[activePad];
     if (!gp) return;
     try {
@@ -116,6 +152,7 @@ const Input = (() => {
     pressed: a => !!cur[a] && !prev[a],
     // Swallow all presses of the current frame (after a menu transition).
     consume() { prev = Object.assign({}, cur); },
+    setTouchSoft(on) { touchSoft = on; },
     on(ev, fn) { listeners[ev].push(fn); },
     get padName() { return padName; },
   };

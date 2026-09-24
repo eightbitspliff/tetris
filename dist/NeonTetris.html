@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Neon Tetris</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3Crect width='3' height='1' fill='%23c34dff'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%23c34dff'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -10,7 +10,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
   <style>
     html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+    html, body { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
 <body>
@@ -306,12 +307,51 @@ const Input = (() => {
     catch (e) { return []; }
   }
 
+  // Controller state pushed from the Android app (see android/.../MainActivity.java).
+  const native = { connected: false, name: null, mask: 0, lx: 0, ly: 0 };
+  window.NativePad = {
+    connect(name) {
+      native.connected = true;
+      native.name = name || 'Gamepad';
+      listeners.connect.forEach(f => f(native.name));
+    },
+    disconnect() {
+      const name = native.name;
+      native.connected = false;
+      native.mask = 0;
+      listeners.disconnect.forEach(f => f(name));
+    },
+    update(mask, lx, ly) {
+      native.mask = mask;
+      native.lx = lx;
+      native.ly = ly;
+    },
+  };
+  let touchSoft = false;
+
+  // Applies one controller to the current action state; returns true if it was used.
+  function applyPad(btn, ax, ay) {
+    let active = false;
+    for (const a in PAD) {
+      if (PAD[a].some(btn)) { cur[a] = true; active = true; }
+    }
+    if (ax < -0.5) { cur.left = true; active = true; }
+    if (ax > 0.5) { cur.right = true; active = true; }
+    if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; active = true; }
+    return active;
+  }
+
   function poll() {
     prev = cur;
     cur = {};
     for (const a in KEYS) cur[a] = KEYS[a].some(k => keysDown.has(k));
+    if (touchSoft) cur.soft = true;
 
     padName = null;
+    if (native.connected) {
+      applyPad(i => ((native.mask >> i) & 1) === 1, native.lx, native.ly);
+      padName = native.name;
+    }
     for (const gp of getPads()) {
       if (!gp || !gp.connected) continue;
       if (padName === null) padName = cleanName(gp.id);
@@ -319,20 +359,17 @@ const Input = (() => {
         const b = gp.buttons[i];
         return !!b && (b.pressed || b.value > 0.5);
       };
-      let active = false;
-      for (const a in PAD) {
-        if (PAD[a].some(btn)) { cur[a] = true; active = true; }
-      }
-      const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-      if (ax < -0.5) { cur.left = true; active = true; }
-      if (ax > 0.5) { cur.right = true; active = true; }
-      if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; active = true; }
+      const active = applyPad(btn, gp.axes[0] || 0, gp.axes[1] || 0);
       if (active || activePad < 0) activePad = gp.index;
       if (gp.index === activePad) padName = cleanName(gp.id);
     }
   }
 
   function rumble(duration, strong, weak) {
+    if (window.AndroidBridge) {
+      try { window.AndroidBridge.rumble(Math.round(duration), strong, weak); } catch (e) { /* ignore */ }
+      return;
+    }
     const gp = getPads()[activePad];
     if (!gp) return;
     try {
@@ -355,8 +392,111 @@ const Input = (() => {
     pressed: a => !!cur[a] && !prev[a],
     // Swallow all presses of the current frame (after a menu transition).
     consume() { prev = Object.assign({}, cur); },
+    setTouchSoft(on) { touchSoft = on; },
     on(ev, fn) { listeners[ev].push(fn); },
     get padName() { return padName; },
+  };
+})();
+
+</script>
+  <script>
+'use strict';
+
+// Touch gestures for phones and tablets:
+//   drag left/right  -> move one column per step
+//   drag down & hold -> soft drop
+//   fast swipe down  -> hard drop
+//   fast swipe up    -> hold
+//   tap              -> rotate (right half clockwise, left half counter-clockwise)
+const Touch = (() => {
+  const handlers = { tap: [], move: [], hard: [], hold: [], soft: [] };
+  const emit = (ev, ...args) => handlers[ev].forEach(f => f(...args));
+  const isTouchDevice = (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+  let stepPx = 30;
+  let active = null;
+  let used = false;
+
+  function find(e) {
+    if (!active) return null;
+    for (const t of e.changedTouches) if (t.identifier === active.id) return t;
+    return null;
+  }
+
+  function velocityY(a, now) {
+    // Average vertical speed over the last ~120 ms (px/ms)
+    const recent = a.samples.filter(s => now - s.t <= 120);
+    if (recent.length < 2) return 0;
+    const f = recent[0], l = recent[recent.length - 1];
+    return (l.y - f.y) / Math.max(1, l.t - f.t);
+  }
+
+  function start(e) {
+    e.preventDefault();
+    used = true;
+    if (active) return;
+    const t = e.changedTouches[0], now = performance.now();
+    active = {
+      id: t.identifier, x0: t.clientX, y0: t.clientY, ax: t.clientX,
+      t0: now, moved: false, soft: false, samples: [{ y: t.clientY, t: now }],
+    };
+  }
+
+  function move(e) {
+    e.preventDefault();
+    const t = find(e);
+    if (!t) return;
+    const a = active, now = performance.now();
+    a.samples.push({ y: t.clientY, t: now });
+    if (a.samples.length > 12) a.samples.shift();
+    const totalDx = t.clientX - a.x0, totalDy = t.clientY - a.y0;
+    if (Math.abs(totalDx) > 10 || Math.abs(totalDy) > 10) a.moved = true;
+
+    const steps = Math.trunc((t.clientX - a.ax) / stepPx);
+    if (steps !== 0) {
+      for (let i = 0; i < Math.abs(steps); i++) emit('move', Math.sign(steps));
+      a.ax += steps * stepPx;
+    }
+    if (!a.soft && totalDy > stepPx * 1.2 && totalDy > Math.abs(totalDx) * 1.2) {
+      a.soft = true;
+      emit('soft', true);
+    }
+  }
+
+  function end(e) {
+    e.preventDefault();
+    const t = find(e);
+    if (!t) return;
+    const a = active, now = performance.now();
+    active = null;
+    if (a.soft) emit('soft', false);
+    a.samples.push({ y: t.clientY, t: now });
+    const totalDx = t.clientX - a.x0, totalDy = t.clientY - a.y0;
+    const vy = velocityY(a, now);
+    const quick = now - a.t0 < 280; // a short flick counts regardless of the exact speed
+    const vertical = Math.abs(totalDy) > Math.abs(totalDx) * 1.2;
+    if (vertical && totalDy > stepPx * 2.5 && (quick || vy > 0.9)) emit('hard');
+    else if (vertical && totalDy < -stepPx * 2 && (quick || vy < -0.6)) emit('hold');
+    else if (!a.moved && now - a.t0 < 350) emit('tap', t.clientX, t.clientY);
+  }
+
+  function cancel() {
+    if (active && active.soft) emit('soft', false);
+    active = null;
+  }
+
+  function attach(el) {
+    el.addEventListener('touchstart', start, { passive: false });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: false });
+    el.addEventListener('touchcancel', cancel, { passive: false });
+  }
+
+  return {
+    attach,
+    on(ev, fn) { handlers[ev].push(fn); },
+    set stepPx(v) { stepPx = v; },
+    get isTouchDevice() { return isTouchDevice; },
+    get used() { return used; },
   };
 })();
 
@@ -511,6 +651,9 @@ class Game {
     this.lastAction = null;
     this.lastKick = 0;
   }
+
+  // True when the active piece accepts direct commands (touch input).
+  canAct() { return this.state === 'playing' && !!this.piece && !this.clearing; }
 
   get matrix() { return MATRICES[this.piece.type][this.piece.rot]; }
 
@@ -923,6 +1066,7 @@ class Renderer {
     this.toasts = [];
     this.shake = 0;
     this.flash = 0;
+    this.buttons = [];
     this.time = 0;
     this.hue = 200;
     this.displayScore = 0;
@@ -956,16 +1100,32 @@ class Renderer {
     this.H = innerHeight;
     this.cv.width = Math.round(this.W * dpr);
     this.cv.height = Math.round(this.H * dpr);
-    const cell = Math.max(8, Math.floor(Math.min(this.W / 23.5, this.H / (ROWS + 3.2))));
-    this.cell = cell;
-    this.bw = cell * COLS;
-    this.bh = cell * ROWS;
-    this.bx = Math.round((this.W - this.bw) / 2);
-    this.by = Math.round((this.H - this.bh) / 2 + cell * 0.2);
-    this.panelW = cell * 5.2;
-    this.gap = cell * 0.9;
-    this.lx = this.bx - this.gap - this.panelW;
-    this.rx = this.bx + this.bw + this.gap;
+    this.portrait = this.H > this.W * 1.1;
+    if (this.portrait) {
+      // Phone upright: board on the left, one narrow info column on the right.
+      const cell = Math.max(8, Math.floor(Math.min(this.W / 15.2, this.H / (ROWS + 4.5))));
+      this.cell = cell;
+      this.bw = cell * COLS;
+      this.bh = cell * ROWS;
+      this.panelW = cell * 3.7;
+      this.gap = cell * 0.45;
+      this.bx = Math.round((this.W - this.bw - this.gap - this.panelW) / 2);
+      this.by = Math.round((this.H - this.bh) / 2 + cell * 0.6);
+      this.rx = this.bx + this.bw + this.gap;
+      this.lx = this.rx;
+    } else {
+      const cell = Math.max(8, Math.floor(Math.min(this.W / 23.5, this.H / (ROWS + (this.H < 500 ? 1.2 : 3.2)))));
+      this.cell = cell;
+      this.bw = cell * COLS;
+      this.bh = cell * ROWS;
+      this.bx = Math.round((this.W - this.bw) / 2);
+      this.by = Math.round((this.H - this.bh) / 2 + cell * 0.2);
+      this.panelW = cell * 5.2;
+      this.gap = cell * 0.9;
+      this.lx = this.bx - this.gap - this.panelW;
+      this.rx = this.bx + this.bw + this.gap;
+    }
+    const cell = this.cell;
     const px = Math.ceil(Math.max(cell, 40) * dpr);
     this.sprites = {};
     this.glows = {};
@@ -1161,6 +1321,7 @@ class Renderer {
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'source-over';
     this.drawBackground();
+    this.buttons = [];
 
     if (g.state === 'menu') {
       this.drawMenu();
@@ -1168,9 +1329,10 @@ class Renderer {
       c.save();
       c.translate((Math.random() * 2 - 1) * this.shake, (Math.random() * 2 - 1) * this.shake);
       this.drawBoard();
-      this.drawPanels();
+      if (this.portrait) this.drawPanelsPortrait(); else this.drawPanels();
       this.drawEffects();
       c.restore();
+      if (g.state === 'playing' && Touch.isTouchDevice) this.drawPauseButton();
       if (g.state === 'paused') this.drawPause();
       if (g.state === 'gameover') this.drawGameOver();
     }
@@ -1576,6 +1738,40 @@ class Renderer {
     c.globalAlpha = 1;
   }
 
+  drawPanelsPortrait() {
+    const g = this.game, cell = this.cell, c = this.ctx;
+    const x = this.rx, pw = this.panelW, by = this.by;
+
+    this.panel(x, by, pw, cell * 2.9, 'HOLD');
+    if (g.hold) this.drawMini(g.hold, x + pw / 2, by + cell * 1.85, cell * 0.55, g.canHold ? 1 : 0.35, false);
+
+    const ny = by + cell * 3.3, nh = cell * 9.4;
+    this.panel(x, ny, pw, nh, 'NEXT');
+    if (g.queue.length) {
+      this.drawMini(g.queue[0], x + pw / 2, ny + cell * 2.1, cell * 0.62, 1, true);
+      for (let i = 1; i < 5; i++) {
+        this.drawMini(g.queue[i], x + pw / 2, ny + cell * (3.9 + (i - 1) * 1.6), cell * 0.48, 1 - i * 0.12);
+      }
+    }
+
+    const sy = ny + nh + cell * 0.4, sh = this.bh - (sy - by);
+    this.panel(x, sy, pw, sh, null);
+    const pad = cell * 0.35, maxW = pw - pad * 2;
+    let y = sy + cell * 0.55;
+    const stat = (label, value, color) => {
+      this.text(label, x + pad, y, { size: cell * 0.3, align: 'left', color: 'rgba(200,210,255,0.7)', spacing: 1 });
+      y += cell * 0.62;
+      const size = Math.min(cell * 0.55, maxW / Math.max(1, this.measure(value, 1, 900)));
+      this.text(value, x + pad, y, { size, align: 'left', color, weight: 900 });
+      y += cell * 0.9;
+    };
+    stat('SCORE', fmt(this.displayScore), '#ffffff');
+    stat('LEVEL', String(g.level), this.accent);
+    stat('LINES', String(g.lines), '#ffffff');
+    if (y < sy + sh - cell * 1.2) stat('REKORD', fmt(Math.max(g.highscore, g.score)), '#ffe03a');
+    c.globalAlpha = 1;
+  }
+
   drawPanels() {
     const g = this.game, cell = this.cell, c = this.ctx;
     const lx = this.lx, rx = this.rx, pw = this.panelW, by = this.by;
@@ -1711,6 +1907,35 @@ class Renderer {
     }
   }
 
+  // Rows: { glyphs: [...] } for controller buttons or { key: 'text' }, plus text.
+  drawLegendColumn(col, x, y, w, fs) {
+    this.text(col.title, x, y, { size: fs * 0.85, align: 'left', color: this.accent, spacing: 2 });
+    y += fs * 1.7;
+    const ts = fs * 0.72;
+    let keyW = 0;
+    for (const r of col.rows) {
+      keyW = Math.max(keyW, r.glyphs
+        ? r.glyphs.reduce((a, b) => a + this.glyphWidth(b, fs * 1.05) + fs * 0.25, 0)
+        : this.measure(r.key, ts, 700));
+    }
+    keyW += fs * 0.6;
+    for (const r of col.rows) {
+      if (r.glyphs) {
+        let gx = x;
+        for (const b of r.glyphs) gx += this.btn(b, gx, y, fs * 1.05) + fs * 0.25;
+      } else {
+        this.text(r.key, x, y, { size: ts, align: 'left', color: '#ffffff', weight: 700 });
+      }
+      this.text(r.text, x + keyW, y, { size: ts, align: 'left', color: '#dfe6ff', weight: 500 });
+      y += fs * 1.35;
+    }
+  }
+
+  glyphWidth(label, h) {
+    if (PAD_COLORS[label] || (label[0] === 'D' && label.length === 2)) return h;
+    return Math.max(h * 1.3, this.measure(label, h * 0.45) + h * 0.6);
+  }
+
   drawMenu() {
     const c = this.ctx, W = this.W, H = this.H, t = this.time;
     const vg = c.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, Math.max(W, H) * 0.7);
@@ -1721,10 +1946,11 @@ class Renderer {
 
     // Title made of blocks
     const word = 'TETRIS', order = ['Z', 'L', 'O', 'S', 'I', 'T'];
-    const bs = Math.floor(Math.min(W / 38, H / 15));
+    const short = H < 600 && !this.portrait;
+    const bs = Math.floor(Math.min(W / 34, H / (short ? 26 : 15)));
     const totalCols = word.split('').reduce((a, ch) => a + LETTERS[ch][0].length, 0) + word.length - 1;
     let x0 = (W - totalCols * bs) / 2;
-    const y0 = H * 0.13;
+    const y0 = H * (this.portrait ? 0.12 : short ? 0.05 : 0.13);
     let gcol = 0;
     for (let i = 0; i < word.length; i++) {
       const L = LETTERS[word[i]], type = order[i];
@@ -1745,62 +1971,84 @@ class Renderer {
       gcol += L[0].length + 1;
     }
 
-    this.text('N E O N   E D I T I O N', W / 2, y0 + bs * 6.6, { size: bs * 0.62, color: this.accent, glow: true, weight: 700 });
+    this.text('N E O N   E D I T I O N', W / 2, y0 + bs * 6.6, { size: Math.max(12, bs * 0.62), color: this.accent, glow: true, weight: 700 });
 
     // Start prompt
+    const touch = Touch.isTouchDevice;
     const blink = 0.55 + 0.45 * Math.sin(t * 0.005);
-    const ph = Math.max(22, bs * 0.95);
+    const ph = clamp(bs * (short ? 1.3 : 0.95), 20, 40);
     c.globalAlpha = blink;
-    this.hintRow(['Drücke', '@A', 'oder', '@ENTER', 'zum Starten'], W / 2, H * 0.5, ph);
+    this.hintRow(touch ? ['Drücke', '@A', 'oder', 'tippe', 'zum Starten'] : ['Drücke', '@A', 'oder', '@ENTER', 'zum Starten'],
+      W / 2, y0 + bs * 6.6 + ph * 2.2, ph);
     c.globalAlpha = 1;
 
     // Controls legend
-    const fs = clamp(H * 0.022, 12, 20);
-    const bw = Math.min(W * 0.9, fs * 40), bh = fs * 13.5;
-    const bx = (W - bw) / 2, by = H * 0.57;
+    const padCol = {
+      title: 'XBOX CONTROLLER',
+      rows: [
+        { glyphs: ['DL', 'DR'], text: 'Bewegen (auch Stick)' },
+        { glyphs: ['DD'], text: 'Soft Drop' },
+        { glyphs: ['DU', 'RT'], text: 'Hard Drop' },
+        { glyphs: ['A', 'B'], text: 'Drehen rechts / links' },
+        { glyphs: ['Y'], text: '180° drehen' },
+        { glyphs: ['X', 'LB', 'RB'], text: 'Halten (Hold)' },
+        { glyphs: ['START'], text: 'Pause' },
+        { glyphs: ['VIEW'], text: 'Musik an / aus' },
+      ],
+    };
+    const keyCol = {
+      title: 'TASTATUR',
+      rows: [
+        { key: '← →', text: 'Bewegen' },
+        { key: '↓', text: 'Soft Drop' },
+        { key: 'Leertaste', text: 'Hard Drop' },
+        { key: '↑ / X', text: 'Drehen rechts' },
+        { key: 'Z / Y / Strg', text: 'Drehen links' },
+        { key: 'A', text: '180° drehen' },
+        { key: 'C / Shift', text: 'Halten (Hold)' },
+        { key: 'P / Esc · M', text: 'Pause · Musik' },
+      ],
+    };
+    const touchCol = {
+      title: 'TOUCH',
+      rows: [
+        { key: 'Ziehen ← →', text: 'Bewegen' },
+        { key: 'Ziehen ↓', text: 'Soft Drop' },
+        { key: 'Wischen ↓', text: 'Hard Drop' },
+        { key: 'Tippen rechts', text: 'Drehen rechts' },
+        { key: 'Tippen links', text: 'Drehen links' },
+        { key: 'Wischen ↑', text: 'Halten (Hold)' },
+        { key: 'Knopf oben rechts', text: 'Pause' },
+      ],
+    };
+    const cols = this.portrait
+      ? [touch && !Input.padName ? touchCol : padCol]
+      : [padCol, touch ? touchCol : keyCol];
+    const rows = Math.max(...cols.map(col => col.rows.length));
+    const by = this.portrait || short ? y0 + bs * 6.6 + ph * 3.2 : Math.max(y0 + bs * 6.6 + ph * 3.6, H * 0.57);
+    // Shrink the legend so it always fits above the status line.
+    const room = (H - by - 44) / (3.0 + rows * 1.35);
+    const fs = Math.max(8, Math.min(room, this.portrait ? clamp(Math.min(H * 0.022, W * 0.042), 11, 20) : clamp(H * 0.022, 12, 20)));
+    const bw = this.portrait ? Math.min(W * 0.92, fs * 22) : Math.min(W * 0.9, fs * 40);
+    const bh = fs * (3.0 + rows * 1.35);
+    const bx = (W - bw) / 2;
     rr(c, bx, by, bw, bh, fs);
     c.fillStyle = 'rgba(8,10,26,0.75)';
     c.fill();
     c.strokeStyle = `hsla(${this.hue},100%,70%,0.4)`;
     c.lineWidth = 1.5;
     c.stroke();
+    const colW = bw / cols.length;
+    cols.forEach((col, i) => this.drawLegendColumn(col, bx + i * colW + fs * 1.3, by + fs * 1.5, colW, fs));
 
-    const colL = bx + fs * 1.5, colR = bx + bw / 2 + fs * 1.2;
-    this.text('XBOX CONTROLLER', colL, by + fs * 1.5, { size: fs * 0.85, align: 'left', color: this.accent, spacing: 2 });
-    this.text('TASTATUR', colR, by + fs * 1.5, { size: fs * 0.85, align: 'left', color: this.accent, spacing: 2 });
-    const pad = [
-      [['DL', 'DR'], 'Bewegen (auch Stick)'],
-      [['DD'], 'Soft Drop'],
-      [['DU', 'RT'], 'Hard Drop'],
-      [['A', 'B'], 'Drehen rechts / links'],
-      [['Y'], '180° drehen'],
-      [['X', 'LB', 'RB'], 'Halten (Hold)'],
-      [['START'], 'Pause'],
-      [['VIEW'], 'Musik an / aus'],
-    ];
-    const keys = [
-      ['← →', 'Bewegen'],
-      ['↓', 'Soft Drop'],
-      ['Leertaste', 'Hard Drop'],
-      ['↑ / X', 'Drehen rechts'],
-      ['Z / Y / Strg', 'Drehen links'],
-      ['A', '180° drehen'],
-      ['C / Shift', 'Halten (Hold)'],
-      ['P / Esc  ·  M', 'Pause · Musik'],
-    ];
-    const rowH = fs * 1.35;
-    let y = by + fs * 3.2;
-    for (let i = 0; i < pad.length; i++) {
-      let x = colL;
-      for (const b of pad[i][0]) x += this.btn(b, x, y, fs * 1.05) + fs * 0.25;
-      this.text(pad[i][1], colL + fs * 5.2, y, { size: fs * 0.72, align: 'left', color: '#dfe6ff', weight: 500 });
-      this.text(keys[i][0], colR, y, { size: fs * 0.72, align: 'left', color: '#ffffff', weight: 700 });
-      this.text(keys[i][1], colR + fs * 7.8, y, { size: fs * 0.72, align: 'left', color: '#dfe6ff', weight: 500 });
-      y += rowH;
+    let ny = by + bh + fs * 1.6;
+    if (this.portrait) {
+      this.text(touch && !Input.padName ? 'Xbox-Controller per Bluetooth wird unterstützt' : 'Touch-Steuerung ist ebenfalls aktiv',
+        W / 2, ny, { size: fs * 0.7, color: 'rgba(220,228,255,0.65)', weight: 500 });
+      ny += fs * 1.6;
     }
-
-    if (this.game.highscore > 0) {
-      this.text(`REKORD  ${fmt(this.game.highscore)}`, W / 2, by + bh + fs * 1.6, { size: fs * 0.9, color: '#ffe03a', glow: true });
+    if (this.game.highscore > 0 && ny < H - 40) {
+      this.text(`REKORD  ${fmt(this.game.highscore)}`, W / 2, ny, { size: fs * 0.9, color: '#ffe03a', glow: true });
     }
   }
 
@@ -1810,15 +2058,67 @@ class Renderer {
     c.fillRect(0, 0, this.W, this.H);
   }
 
+  // Clickable/tappable button; registers its rectangle for hitButton().
+  touchButton(cmd, label, glyph, x, y, w, h) {
+    const c = this.ctx;
+    rr(c, x, y, w, h, h * 0.3);
+    c.fillStyle = 'rgba(16,20,44,0.92)';
+    c.fill();
+    c.strokeStyle = `hsla(${this.hue},100%,68%,0.8)`;
+    c.lineWidth = 2;
+    c.stroke();
+    const gh = h * 0.56;
+    const fs = h * 0.36;
+    const gw = glyph ? this.glyphWidth(glyph, gh) : 0;
+    const tw = this.measure(label, fs, 700);
+    const total = gw + (glyph ? h * 0.3 : 0) + tw;
+    let tx = x + (w - total) / 2;
+    if (glyph) { this.btn(glyph, tx, y + h / 2, gh); tx += gw + h * 0.3; }
+    this.text(label, tx, y + h / 2, { size: fs, align: 'left', color: '#fff' });
+    this.buttons.push({ cmd, x, y, w, h });
+  }
+
+  hitButton(x, y) {
+    for (const b of this.buttons) {
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.cmd;
+    }
+    return null;
+  }
+
+  drawPauseButton() {
+    const c = this.ctx;
+    const s = clamp(this.cell * 1.3, 40, 60);
+    const x = this.W - s - 12, y = 12;
+    c.beginPath();
+    c.arc(x + s / 2, y + s / 2, s / 2, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(16,20,44,0.75)';
+    c.fill();
+    c.strokeStyle = `hsla(${this.hue},100%,68%,0.7)`;
+    c.lineWidth = 2;
+    c.stroke();
+    c.fillStyle = '#fff';
+    c.fillRect(x + s * 0.36, y + s * 0.3, s * 0.1, s * 0.4);
+    c.fillRect(x + s * 0.54, y + s * 0.3, s * 0.1, s * 0.4);
+    this.buttons.push({ cmd: 'pause', x: x - 8, y: y - 8, w: s + 16, h: s + 16 });
+  }
+
   drawPause() {
     const cell = this.cell, cx = this.W / 2, cy = this.H / 2;
     this.dim(0.62);
-    this.text('PAUSE', cx, cy - cell * 2, { size: cell * 1.6, color: '#fff', glow: this.accent, weight: 900, spacing: 6 });
-    const h = Math.max(22, cell * 0.7);
-    this.hintRow(['@A', 'Weiter'], cx, cy, h);
-    this.hintRow(['@Y', 'Neustart'], cx, cy + h * 1.6, h);
-    this.hintRow(['@VIEW', 'Musik: ' + (Sound.musicOn ? 'an' : 'aus')], cx, cy + h * 3.2, h);
-    this.text('Tastatur: P / Esc = Weiter · R = Neustart · M = Musik', cx, cy + h * 5, { size: h * 0.5, color: 'rgba(220,228,255,0.6)', weight: 500 });
+    const h = clamp(cell * 1.25, 44, 64), w = Math.min(this.W * 0.8, h * 6.5);
+    const top = cy - h * 1.9;
+    this.text('PAUSE', cx, top - h * 1.1, { size: Math.min(cell * 1.6, this.W / 7), color: '#fff', glow: this.accent, weight: 900, spacing: 6 });
+    const items = [
+      ['resume', 'Weiter', 'A'],
+      ['restart', 'Neustart', 'Y'],
+      ['music', 'Musik: ' + (Sound.musicOn ? 'an' : 'aus'), 'VIEW'],
+      ['menu', 'Hauptmenü', null],
+    ];
+    items.forEach(([cmd, label, glyph], i) => this.touchButton(cmd, label, glyph, cx - w / 2, top + i * h * 1.25, w, h));
+    if (!Touch.isTouchDevice) {
+      this.text('Tastatur: P / Esc = Weiter · R = Neustart · M = Musik', cx, top + h * 5.3,
+        { size: clamp(h * 0.3, 11, 16), color: 'rgba(220,228,255,0.6)', weight: 500 });
+    }
   }
 
   drawGameOver() {
@@ -1833,7 +2133,7 @@ class Renderer {
     c.translate(cx, cy);
     c.scale(s, s);
     c.translate(-cx, -cy);
-    this.text('GAME OVER', cx, cy - cell * 4, { size: cell * 1.5, color: '#ff3d5e', glow: true, weight: 900, spacing: 4 });
+    this.text('GAME OVER', cx, cy - cell * 4, { size: Math.min(cell * 1.5, this.W / 8), color: '#ff3d5e', glow: true, weight: 900, spacing: 4 });
     this.text('SCORE', cx, cy - cell * 2.1, { size: cell * 0.4, color: 'rgba(210,220,255,0.7)', spacing: 3 });
     this.text(fmt(g.score), cx, cy - cell * 1.1, { size: cell * 1.1, color: '#fff', glow: this.accent, weight: 900 });
     if (g.newHighscore) {
@@ -1847,25 +2147,34 @@ class Renderer {
       this.text(`Rekord: ${fmt(g.highscore)}`, cx, cy + cell * 0.2, { size: cell * 0.45, color: '#ffe03a' });
     }
     const secs = Math.floor(g.stats.time / 1000);
-    this.text(`Level ${g.level}  ·  ${g.lines} Lines  ·  ${g.stats.tetrises} Tetris  ·  ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`,
-      cx, cy + cell * 1.3, { size: cell * 0.38, color: 'rgba(220,228,255,0.8)', weight: 500 });
-    const h = Math.max(22, cell * 0.7);
+    const summary = `Level ${g.level}  ·  ${g.lines} Lines  ·  ${g.stats.tetrises} Tetris  ·  ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    const ss = Math.min(cell * 0.38, (this.W * 0.9) / Math.max(1, this.measure(summary, 1, 500)));
+    this.text(summary, cx, cy + cell * 1.3, { size: ss, color: 'rgba(220,228,255,0.8)', weight: 500 });
+    const h = clamp(cell * 0.7, 22, 34);
     c.globalAlpha = k * (0.6 + 0.4 * Math.sin(this.time * 0.005));
-    this.hintRow(['@A', 'oder', '@ENTER', 'Nochmal spielen'], cx, cy + cell * 3, h);
+    this.hintRow(Touch.isTouchDevice ? ['@A', 'oder', 'tippen', 'für neues Spiel'] : ['@A', 'oder', '@ENTER', 'Nochmal spielen'],
+      cx, cy + cell * 3, h);
     c.restore();
   }
 
   drawStatus() {
-    const c = this.ctx, H = this.H;
+    const c = this.ctx, H = this.H, W = this.W;
     const fs = clamp(H * 0.017, 11, 16);
     const name = Input.padName;
+    const touch = Touch.isTouchDevice;
     const x = fs, y = H - fs * 1.4;
     c.beginPath();
     c.arc(x + fs * 0.4, y, fs * 0.32, 0, Math.PI * 2);
     if (name) {
       c.fillStyle = '#3dff72';
       c.fill();
-      this.text(`Controller verbunden: ${name}`, x + fs * 1.1, y, { size: fs * 0.8, align: 'left', color: 'rgba(220,255,230,0.85)', weight: 500 });
+      this.text(this.portrait ? `🎮 ${name}` : `Controller verbunden: ${name}`, x + fs * 1.1, y,
+        { size: fs * 0.8, align: 'left', color: 'rgba(220,255,230,0.85)', weight: 500 });
+    } else if (touch) {
+      c.fillStyle = '#22e6ff';
+      c.fill();
+      this.text(this.portrait ? 'Touch-Steuerung' : 'Touch-Steuerung aktiv · Xbox-Controller per Bluetooth möglich', x + fs * 1.1, y,
+        { size: fs * 0.8, align: 'left', color: 'rgba(210,245,255,0.8)', weight: 500 });
     } else {
       c.fillStyle = `rgba(255,200,40,${0.5 + 0.5 * Math.sin(this.time * 0.006)})`;
       c.fill();
@@ -1873,7 +2182,7 @@ class Renderer {
         { size: fs * 0.8, align: 'left', color: 'rgba(255,230,180,0.85)', weight: 500 });
     }
     if (!Sound.running) {
-      this.text('🔈 Einmal ins Fenster klicken oder eine Taste drücken für Sound', this.W - fs, y,
+      this.text(touch ? '🔈 Tippen für Sound' : '🔈 Einmal ins Fenster klicken oder eine Taste drücken für Sound', W - fs, y,
         { size: fs * 0.8, align: 'right', color: 'rgba(220,228,255,0.6)', weight: 500 });
     }
   }
@@ -1995,12 +2304,61 @@ function handleMeta() {
   }
 }
 
+// ---------- Touch controls ----------
+const canvas = document.getElementById('game');
+Touch.attach(canvas);
+Touch.on('move', dir => { if (game.canAct()) game.move(dir); });
+Touch.on('hard', () => { if (game.canAct()) game.hardDrop(); });
+Touch.on('hold', () => { if (game.canAct()) game.holdPiece(); });
+Touch.on('soft', on => Input.setTouchSoft(on && game.state === 'playing'));
+Touch.on('tap', (x, y) => {
+  Sound.resume();
+  const cmd = view.hitButton(x, y);
+  if (cmd) { runCommand(cmd); return; }
+  switch (game.state) {
+    case 'menu': startGame(); break;
+    case 'playing': if (game.canAct()) game.rotate(x > view.W / 2 ? 1 : -1); break;
+    case 'paused': resume(); break;
+    case 'gameover': if (view.gameOverT > 1100) startGame(); break;
+  }
+});
+
+canvas.addEventListener('click', e => {
+  const cmd = view.hitButton(e.clientX, e.clientY);
+  if (cmd) runCommand(cmd);
+});
+
+function runCommand(cmd) {
+  if (cmd === 'pause' && game.state === 'playing') pause();
+  else if (cmd === 'resume' && game.state === 'paused') resume();
+  else if (cmd === 'restart') startGame();
+  else if (cmd === 'music') view.toast(Sound.toggleMusic() ? '♪ Musik an' : 'Musik aus');
+  else if (cmd === 'menu') toMenu();
+}
+
+function toMenu() {
+  game.state = 'menu';
+  Sound.setMusicActive(false);
+  Input.consume();
+}
+
+// Hooks called by the Android app
+window.androidBack = () => {
+  if (game.state === 'playing') { pause(); return true; }
+  if (game.state === 'paused' || game.state === 'gameover') { toMenu(); return true; }
+  return false; // in the menu: let Android close the app
+};
+window.androidPause = () => { if (game.state === 'playing') pause(); };
+
 // Browsers only allow audio after a user gesture.
 for (const ev of ['keydown', 'pointerdown', 'touchstart']) {
   addEventListener(ev, () => Sound.resume(), { passive: true });
 }
 addEventListener('blur', () => { if (game.state === 'playing') pause(); });
-document.getElementById('game').focus();
+document.addEventListener('visibilitychange', () => { if (document.hidden && game.state === 'playing') pause(); });
+canvas.focus();
+// The Android app allows audio without a user gesture.
+if (window.AndroidBridge) Sound.resume();
 
 // ---------- Main loop ----------
 let last = performance.now();
@@ -2008,6 +2366,7 @@ function frame(now) {
   const dt = Math.min(50, Math.max(0, now - last));
   last = now;
   Input.poll();
+  Touch.stepPx = Math.max(18, view.cell * 0.9);
   handleMeta();
   game.update(dt, Input);
   view.update(dt);

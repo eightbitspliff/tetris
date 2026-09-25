@@ -1035,6 +1035,10 @@ class Renderer {
     this.hintRow(touch ? ['Drücke', '@A', 'oder', 'tippe', 'zum Starten'] : ['Drücke', '@A', 'oder', '@ENTER', 'zum Starten'],
       W / 2, y0 + bs * 6.6 + ph * 2.2, ph);
     c.globalAlpha = 1;
+    if (window.DesktopBridge) {
+      this.hintRow(['@B', 'oder', 'Esc', '= Beenden', '   ·   ', 'F11 / Alt+Enter', '= Vollbild'],
+        W / 2, y0 + bs * 6.6 + ph * 3.3, ph * 0.6, 'rgba(220,228,255,0.7)');
+    }
 
     // Controls legend
     const padCol = {
@@ -1079,7 +1083,8 @@ class Renderer {
       ? [touch && !Input.padName ? touchCol : padCol]
       : [padCol, touch ? touchCol : keyCol];
     const rows = Math.max(...cols.map(col => col.rows.length));
-    const by = this.portrait || short ? y0 + bs * 6.6 + ph * 3.2 : Math.max(y0 + bs * 6.6 + ph * 3.6, H * 0.57);
+    const extra = window.DesktopBridge ? ph * 0.9 : 0;
+    const by = (this.portrait || short ? y0 + bs * 6.6 + ph * 3.2 : Math.max(y0 + bs * 6.6 + ph * 3.6, H * 0.57)) + extra;
     // Shrink the legend so it always fits above the status line.
     const room = (H - by - 44) / (3.0 + rows * 1.35);
     const fs = Math.max(8, Math.min(room, this.portrait ? clamp(Math.min(H * 0.022, W * 0.042), 11, 20) : clamp(H * 0.022, 12, 20)));
@@ -1113,13 +1118,20 @@ class Renderer {
   }
 
   // Clickable/tappable button; registers its rectangle for hitButton().
-  touchButton(cmd, label, glyph, x, y, w, h) {
+  touchButton(cmd, label, glyph, x, y, w, h, selected = false) {
     const c = this.ctx;
+    c.save();
+    if (selected) {
+      c.shadowColor = this.accent;
+      c.shadowBlur = h * 0.5;
+    }
     rr(c, x, y, w, h, h * 0.3);
-    c.fillStyle = 'rgba(16,20,44,0.92)';
+    c.fillStyle = selected ? `hsla(${this.hue},90%,45%,0.55)` : 'rgba(16,20,44,0.92)';
     c.fill();
-    c.strokeStyle = `hsla(${this.hue},100%,68%,0.8)`;
-    c.lineWidth = 2;
+    c.restore();
+    rr(c, x, y, w, h, h * 0.3);
+    c.strokeStyle = selected ? '#ffffff' : `hsla(${this.hue},100%,68%,0.8)`;
+    c.lineWidth = selected ? 3 : 2;
     c.stroke();
     const gh = h * 0.56;
     const fs = h * 0.36;
@@ -1129,6 +1141,11 @@ class Renderer {
     let tx = x + (w - total) / 2;
     if (glyph) { this.btn(glyph, tx, y + h / 2, gh); tx += gw + h * 0.3; }
     this.text(label, tx, y + h / 2, { size: fs, align: 'left', color: '#fff' });
+    if (selected) {
+      const bob = Math.sin(this.time * 0.008) * h * 0.06;
+      this.text('▶', x + h * 0.45 + bob, y + h / 2, { size: fs, color: '#fff' });
+      this.text('◀', x + w - h * 0.45 - bob, y + h / 2, { size: fs, color: '#fff' });
+    }
     this.buttons.push({ cmd, x, y, w, h });
   }
 
@@ -1159,19 +1176,18 @@ class Renderer {
   drawPause() {
     const cell = this.cell, cx = this.W / 2, cy = this.H / 2;
     this.dim(0.62);
-    const h = clamp(cell * 1.25, 44, 64), w = Math.min(this.W * 0.8, h * 6.5);
-    const top = cy - h * 1.9;
-    this.text('PAUSE', cx, top - h * 1.1, { size: Math.min(cell * 1.6, this.W / 7), color: '#fff', glow: this.accent, weight: 900, spacing: 6 });
-    const items = [
-      ['resume', 'Weiter', 'A'],
-      ['restart', 'Neustart', 'Y'],
-      ['music', 'Musik: ' + (Sound.musicOn ? 'an' : 'aus'), 'VIEW'],
-      ['menu', 'Hauptmenü', null],
-    ];
-    items.forEach(([cmd, label, glyph], i) => this.touchButton(cmd, label, glyph, cx - w / 2, top + i * h * 1.25, w, h));
+    const items = this.menuItems ? this.menuItems() : [];
+    const h = clamp(Math.min(cell * 1.25, this.H / (items.length * 1.25 + 5)), 34, 64);
+    const w = Math.min(this.W * 0.8, h * 6.5);
+    const top = cy - (items.length * h * 1.25) / 2 + h * 0.3;
+    this.text('PAUSE', cx, top - h * 1.1, { size: Math.min(cell * 1.6, this.W / 7, h * 1.5), color: '#fff', glow: this.accent, weight: 900, spacing: 6 });
+    items.forEach((it, i) => this.touchButton(it.cmd, it.label, null, cx - w / 2, top + i * h * 1.25, w, h, i === this.pauseSel));
+    const hy = top + items.length * h * 1.25 + h * 0.35;
+    const hh = clamp(h * 0.55, 20, 30);
+    this.hintRow(['@DU', '@DD', 'Auswählen', '   ', '@A', 'Bestätigen', '   ', '@B', 'Zurück'], cx, hy, hh, 'rgba(225,232,255,0.85)');
     if (!Touch.isTouchDevice) {
-      this.text('Tastatur: P / Esc = Weiter · R = Neustart · M = Musik', cx, top + h * 5.3,
-        { size: clamp(h * 0.3, 11, 16), color: 'rgba(220,228,255,0.6)', weight: 500 });
+      this.text('Tastatur: ↑ ↓ Auswählen · Enter Bestätigen · Esc Weiter' + (window.DesktopBridge ? ' · F11 Vollbild' : ''),
+        cx, hy + hh * 1.5, { size: clamp(h * 0.3, 11, 16), color: 'rgba(220,228,255,0.6)', weight: 500 });
     }
   }
 

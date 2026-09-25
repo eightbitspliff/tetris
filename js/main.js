@@ -56,7 +56,45 @@ function startGame() {
   Sound.setMusicActive(true);
   Input.consume();
 }
+// ---------- Platform: Windows desktop app (Electron) or browser ----------
+const Desktop = window.DesktopBridge || null;
+const canFullscreen = !!Desktop || !!document.fullscreenEnabled;
+
+function isFullscreen() {
+  return Desktop ? Desktop.isFullscreen() : !!document.fullscreenElement;
+}
+function toggleFullscreen() {
+  if (Desktop) Desktop.toggleFullscreen();
+  else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+}
+
+// F11 / Alt+Enter toggle fullscreen in the desktop app (browsers handle F11 themselves).
+addEventListener('keydown', e => {
+  if (!Desktop || e.repeat) return;
+  if (e.key === 'F11' || (e.altKey && e.key === 'Enter')) {
+    e.preventDefault();
+    toggleFullscreen();
+  }
+});
+
+// Pause menu entries (drawn by the renderer, navigated with d-pad / arrows / touch).
+function pauseMenuItems() {
+  const items = [
+    { cmd: 'resume', label: 'Weiter' },
+    { cmd: 'restart', label: 'Neustart' },
+    { cmd: 'music', label: 'Musik: ' + (Sound.musicOn ? 'an' : 'aus') },
+  ];
+  if (canFullscreen) items.push({ cmd: 'fullscreen', label: 'Vollbild: ' + (isFullscreen() ? 'an' : 'aus') });
+  items.push({ cmd: 'menu', label: 'Hauptmenü' });
+  if (Desktop) items.push({ cmd: 'quit', label: 'Spiel beenden' });
+  return items;
+}
+view.menuItems = pauseMenuItems;
+view.pauseSel = 0;
+
 function pause() {
+  view.pauseSel = 0;
   game.state = 'paused';
   Sound.setMusicActive(false);
   Sound.sfx.pause();
@@ -76,16 +114,24 @@ function handleMeta() {
   switch (game.state) {
     case 'menu':
       if (Input.pressed('confirm')) startGame();
+      else if (Desktop && Input.pressed('back')) Desktop.quit();
       break;
     case 'playing':
       if (Input.pressed('pause')) pause();
       break;
-    case 'paused':
-      if (Input.pressed('restart')) startGame();
-      else if (Input.pressed('pause') || Input.pressed('confirm')) resume();
+    case 'paused': {
+      const items = pauseMenuItems();
+      if (Input.pressed('menuUp')) { view.pauseSel = (view.pauseSel + items.length - 1) % items.length; Sound.sfx.move(); }
+      if (Input.pressed('menuDown')) { view.pauseSel = (view.pauseSel + 1) % items.length; Sound.sfx.move(); }
+      view.pauseSel = Math.min(view.pauseSel, items.length - 1);
+      if (Input.pressed('pause') || Input.pressed('back')) resume();
+      else if (Input.pressed('confirm')) runCommand(items[view.pauseSel].cmd);
+      else if (Input.pressed('restart')) startGame();
       break;
+    }
     case 'gameover':
       if (view.gameOverT > 1100 && (Input.pressed('confirm') || Input.pressed('restart'))) startGame();
+      else if (view.gameOverT > 1100 && Input.pressed('back')) toMenu();
       break;
   }
 }
@@ -120,6 +166,8 @@ function runCommand(cmd) {
   else if (cmd === 'restart') startGame();
   else if (cmd === 'music') view.toast(Sound.toggleMusic() ? '♪ Musik an' : 'Musik aus');
   else if (cmd === 'menu') toMenu();
+  else if (cmd === 'fullscreen') toggleFullscreen();
+  else if (cmd === 'quit' && Desktop) Desktop.quit();
 }
 
 function toMenu() {
@@ -143,8 +191,8 @@ for (const ev of ['keydown', 'pointerdown', 'touchstart']) {
 addEventListener('blur', () => { if (game.state === 'playing') pause(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden && game.state === 'playing') pause(); });
 canvas.focus();
-// The Android app allows audio without a user gesture.
-if (window.AndroidBridge) Sound.resume();
+// The Android and Windows apps allow audio without a user gesture.
+if (window.AndroidBridge || Desktop) Sound.resume();
 
 // ---------- Main loop ----------
 let last = performance.now();

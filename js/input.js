@@ -19,6 +19,9 @@ const Input = (() => {
     music: ['KeyM'],
     confirm: ['Enter', 'Space'],
     restart: ['KeyR'],
+    menuUp: ['ArrowUp'],
+    menuDown: ['ArrowDown'],
+    back: ['Escape', 'Backspace'],
   };
   const PAD = {
     left: [14],
@@ -33,6 +36,9 @@ const Input = (() => {
     music: [8],
     confirm: [0, 9],
     restart: [3],
+    menuUp: [12],
+    menuDown: [13],
+    back: [1],
   };
   const GAME_KEYS = new Set(Object.values(KEYS).flat());
 
@@ -43,6 +49,7 @@ const Input = (() => {
   const listeners = { connect: [], disconnect: [] };
 
   addEventListener('keydown', e => {
+    if (e.altKey) return; // Alt+Enter = fullscreen, not "confirm"
     if (GAME_KEYS.has(e.code)) e.preventDefault();
     keysDown.add(e.code);
   });
@@ -97,7 +104,8 @@ const Input = (() => {
     }
     if (ax < -0.5) { cur.left = true; active = true; }
     if (ax > 0.5) { cur.right = true; active = true; }
-    if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; active = true; }
+    if (ay > 0.6 && Math.abs(ax) < 0.7) { cur.soft = true; cur.menuDown = true; active = true; }
+    if (ay < -0.6 && Math.abs(ax) < 0.7) { cur.menuUp = true; active = true; }
     return active;
   }
 

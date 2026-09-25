@@ -1,0 +1,62 @@
+name: Windows Installer
+
+on:
+  push:
+    paths:
+      - 'index.html'
+      - 'js/**'
+      - 'desktop/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Set version
+        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version
+
+      - name: Build installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: Check installer
+        shell: bash
+        run: |
+          ls -la release
+          test -f "release/NeonTetris-Setup-1.0.${{ github.run_number }}.exe"
+          npx --yes @electron/asar list release/win-unpacked/resources/app.asar | grep -E 'game/(index.html|js/main.js)'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonTetris-Setup
+          path: desktop/release/NeonTetris-Setup-*.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: win-build-${{ github.run_number }}
+          name: Neon Tetris – Windows (Build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: desktop/release/NeonTetris-Setup-*.exe
+          body: |
+            Windows-Installer von Neon Tetris.
+            **NeonTetris-Setup-1.0.${{ github.run_number }}.exe** herunterladen und ausführen.
+            Falls Windows SmartScreen warnt: „Weitere Informationen“ → „Trotzdem ausführen“.

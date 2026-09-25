@@ -3,6 +3,23 @@
 Grafisch aufwendiges Tetris im Browser (HTML5 Canvas, kein Build, keine Abhängigkeiten) –
 voll spielbar mit dem **Xbox-Controller**.
 
+## Windows-Programm (Installer)
+
+Der Installer wird automatisch von GitHub Actions auf Windows gebaut und unter **Releases**
+veröffentlicht (`NeonTetris-Setup-1.0.x.exe`). Herunterladen, ausführen, fertig – danach gibt es
+eine Verknüpfung auf dem Desktop und im Startmenü. Deinstallation über
+„Apps & Features“ in den Windows-Einstellungen.
+
+- Startet im **Vollbild**; umschalten mit **F11** / **Alt+Enter** oder im Pausenmenü
+- **Xbox-Controller** (USB/Bluetooth/Wireless-Adapter) inklusive Vibration; das Pausenmenü ist
+  komplett per Controller bedienbar (▲▼ auswählen, Ⓐ bestätigen, Ⓑ zurück)
+- Beenden: im Pausenmenü „Spiel beenden“ oder Ⓑ / Esc im Hauptmenü
+- Der Installer ist nicht signiert: Falls Windows SmartScreen warnt,
+  „Weitere Informationen“ → „Trotzdem ausführen“ klicken
+
+Das Projekt liegt in `desktop/` (Electron). Lokal starten: `cd desktop && npm install && npm start`,
+Installer bauen (unter Windows): `npm run dist`.
+
 ## Android-App
 
 Die APK wird automatisch von GitHub Actions gebaut und unter **Releases** veröffentlicht

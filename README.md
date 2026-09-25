@@ -14,8 +14,27 @@ eine Verknüpfung auf dem Desktop und im Startmenü. Deinstallation über
 - **Xbox-Controller** (USB/Bluetooth/Wireless-Adapter) inklusive Vibration; das Pausenmenü ist
   komplett per Controller bedienbar (▲▼ auswählen, Ⓐ bestätigen, Ⓑ zurück)
 - Beenden: im Pausenmenü „Spiel beenden“ oder Ⓑ / Esc im Hauptmenü
-- Der Installer ist nicht signiert: Falls Windows SmartScreen warnt,
-  „Weitere Informationen“ → „Trotzdem ausführen“ klicken
+- Installation ohne Administratorrechte (nur für den aktuellen Benutzer), ohne UAC-Abfrage
+  und ohne `elevate.exe`-Hilfsprogramm – das vermeidet typische Fehlalarme von Virenscannern
+
+### Warnungen von Windows SmartScreen, Browser und Virenscannern
+
+Ohne **Code-Signatur** zeigen Windows SmartScreen und Browser bei neuen Programmen immer eine
+Warnung („unbekannter Herausgeber“). Der Build ist dafür vorbereitet und signiert automatisch,
+sobald Zugangsdaten als GitHub-Secrets hinterlegt sind (Repo → Settings → Secrets → Actions):
+
+| Variante | Secrets |
+|---|---|
+| **Azure Trusted Signing** (Microsoft, günstig, sofortige SmartScreen-Reputation) | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, `AZURE_SIGN_PUBLISHER` |
+| **Code-Signing-Zertifikat** als `.pfx` (z. B. Certum, Sectigo) | `WIN_CSC_LINK` (Base64 der .pfx), `WIN_CSC_KEY_PASSWORD` |
+
+In den Release-Notes steht bei jedem Build, ob der Installer signiert ist, und seine SHA-256-Prüfsumme.
+
+Falls Bitdefender oder Microsoft Defender den Installer trotzdem melden (Fehlalarm), kann er dort
+zur Prüfung eingereicht werden – danach wird er in der Regel freigegeben:
+- Microsoft: https://www.microsoft.com/en-us/wdsi/filesubmission („Software developer“ → „Incorrectly detected as malware“)
+- Bitdefender: auf bitdefender.de unter Support nach „Falsch-Positiv melden“ / „Submit a sample“ suchen
+  und die Setup-Datei als Fehlalarm einreichen
 
 Das Projekt liegt in `desktop/` (Electron). Lokal starten: `cd desktop && npm install && npm start`,
 Installer bauen (unter Windows): `npm run dist`.

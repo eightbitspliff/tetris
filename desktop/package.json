@@ -3,53 +3,20 @@
   "productName": "Neon Tetris",
   "version": "1.0.0",
   "description": "Neon Tetris – grafisch aufwendiges Tetris mit Xbox-Controller-Steuerung",
-  "author": "eightbitspliff",
+  "author": {
+    "name": "eightbitspliff"
+  },
   "license": "UNLICENSED",
   "private": true,
   "main": "main.js",
   "scripts": {
     "prepare-game": "node copy-game.js",
     "start": "node copy-game.js && electron .",
-    "dist": "node copy-game.js && electron-builder --win nsis --x64 --publish never"
+    "dist": "node copy-game.js && electron-builder --config electron-builder.config.js --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3"
   },
-  "build": {
-    "appId": "com.eightbitspliff.neontetris",
-    "productName": "Neon Tetris",
-    "files": [
-      "main.js",
-      "preload.js",
-      "build/icon.png",
-      "game/**/*"
-    ],
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        }
-      ],
-      "icon": "build/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": "always",
-      "createStartMenuShortcut": true,
-      "shortcutName": "Neon Tetris",
-      "uninstallDisplayName": "Neon Tetris",
-      "installerLanguages": ["de_DE"],
-      "language": "1031",
-      "runAfterFinish": true,
-      "artifactName": "NeonTetris-Setup-${version}.${ext}"
-    }
-  }
+  "homepage": "https://github.com/eightbitspliff/tetris"
 }

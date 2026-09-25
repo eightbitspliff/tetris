@@ -41,7 +41,10 @@ jobs:
         run: |
           ls -la release
           test -f "release/NeonTetris-Setup-1.0.${{ github.run_number }}.exe"
-          npx --yes @electron/asar list release/win-unpacked/resources/app.asar | grep -E 'game/(index.html|js/main.js)'
+          # asar prints Windows paths with backslashes, so match either separator
+          npx --yes @electron/asar list release/win-unpacked/resources/app.asar > asar-files.txt
+          grep -E 'game[\\/]index\.html' asar-files.txt
+          grep -E 'game[\\/]js[\\/]main\.js' asar-files.txt
 
       - uses: actions/upload-artifact@v4
         with:

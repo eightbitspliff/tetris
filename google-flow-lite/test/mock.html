@@ -1,0 +1,31 @@
+<!doctype html><meta charset=utf-8><title>Flow Mock</title>
+<style>body{font:14px sans-serif}.tile{position:relative;display:inline-block;margin:4px}.tile img,.tile video{width:120px;height:120px;display:block}.tile .more{position:absolute;top:2px;right:2px;display:none}.tile:hover .more,.tile.h .more{display:block}#panel,#menu,#amenu{border:1px solid #999;padding:6px}</style>
+<div id=app></div>
+<script>
+const app=document.getElementById("app");let n=0;var grid=[];
+const st={type:'Bild',ratio:'16:9',res:'720p',dur:'8',count:'1',model:'Nano Banana Pro'};
+if(!location.pathname.startsWith('/project/')){
+  app.innerHTML='<a href="/project/abc123">Mein Film</a> <a href="/project/def456">Test</a> <button onclick="location.href=\'/project/new999\'">add Neues Projekt</button>';
+} else render();
+function radio(lbl,key,val){return `<div role=radio aria-checked=${st[key]===val} onclick="st.${key}='${val}';render(true)">${lbl}</div>`}
+function render(open){
+  const ph='Was möchten Sie erstellen?';
+  const cost=(st.type==='Bild'?2:12)*+st.count;
+  app.innerHTML=`<button aria-label="Zu den Einstellungen" onclick="render(true)">tune</button>
+  ${open?`<div id=panel>${radio('image Bild','type','Bild')}${radio('videocam Video','type','Video')}${radio('crop_free Frames','type','Frames')}${radio('chrome_extension Bildelemente','type','Bildelemente')}
+   ${radio('crop_16_9 16:9','ratio','16:9')}${radio('crop_9_16 9:16','ratio','9:16')}${radio('crop_square 1:1','ratio','1:1')}
+   ${radio('360p info','res','360p')}${radio('720p','res','720p')}${radio('4 Sek.','dur','4')}${radio('8 Sek.','dur','8')}${radio('1-mal','count','1')}${radio('2-mal','count','2')}
+   <button id=mb onclick="document.getElementById('menu').hidden=false">${st.model} arrow_drop_down</button>
+   <div id=menu hidden>${['Omni 1.1 Flash','Veo 3.1 - Lite','Veo 3.1 - Fast','Veo 3.1 - Quality','🍌 Nano Banana Pro'].map(m=>`<div role=menuitem onclick="st.model='${m.replace('🍌 ','')}';render(true)">${m}</div>`).join('')}</div>
+   <p>Für die Generierung werden ${cost} Guthabenpunkte verwendet</p></div>`:''}
+  <textarea placeholder="${ph}" style="width:500px"></textarea><button aria-label="Erstellen">arrow_forward</button>
+  <div id=grid>${grid.join('')}</div><input type=file hidden>`;
+  document.querySelector('[aria-label=Erstellen]').onclick=gen;
+  document.querySelectorAll('.more').forEach(b=>b.onclick=e=>{const t=e.target.closest('.tile');const m=document.createElement('div');m.id='amenu';m.innerHTML=['Favorit','Animieren','Herunterladen','In Papierkorb verschieben'].map(x=>`<div role=menuitem>${x}</div>`).join('');m.querySelectorAll('[role=menuitem]').forEach(i=>i.onclick=()=>{if(i.innerText.includes('Papierkorb')){const src=t.querySelector('img,video').getAttribute('src');grid=grid.filter(g=>!g.includes(src))}m.remove();window.lastAction=i.innerText;render()});document.body.append(m)});
+  document.querySelectorAll('.tile').forEach(t=>t.onmouseover=()=>t.classList.add('h'));
+}
+addEventListener('keydown',e=>{if(e.key==='Escape'){render(false)}});
+
+function gen(){const v=st.type!=='Bild';const c=+st.count;const p=document.querySelector('textarea').value;window.lastPrompt=p;
+  setTimeout(()=>{for(let i=0;i<c;i++){const id=++n;grid.unshift(`<div class=tile data-i=${grid.length}>${v?`<video src="/flow-content.google/v${id}.mp4?Expires=1"></video>`:`<img src="/flow-content.google/i${id}.png?Expires=1">`}<button class=more aria-label="Weitere Optionen">more_vert</button></div>`)}render()},3000)}
+</script>
